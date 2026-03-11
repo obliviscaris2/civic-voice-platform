@@ -1,10 +1,11 @@
-export async function findSimilarReports(text: string) {
+import type { SimilarityAnalyzerOutput } from "./types.js";
 
-  // placeholder logic
-
+export async function findSimilarReports(_text: string): Promise<SimilarityAnalyzerOutput> {
   return {
-    similarReports: [],
-    clusterId: null
+    duplicate_candidates: [],
+    likely_duplicate: false,
+    likely_clustered_issue: false,
+    cluster_confidence: 0.1,
+    cluster_key: null
   };
-
 }

@@ -1,42 +1,12 @@
+import { z } from "zod";
+import { getOpenAIClient } from "./openaiClient.js";
+import { config } from "./config.js";
+import { buildSafetyPrompt } from "./promptTemplates.js";
+import { SafetyAnalyzerOutputSchema } from "./schemas.js";
 import type { SafetyAnalyzerOutput } from "./types.js";
 
-export async function safetyAnalyze(text: string): Promise<SafetyAnalyzerOutput> {
+function fallbackSafety(text: string): SafetyAnalyzerOutput {
   const hasPhone = /(?:\+977[-\s]?)?(9\d{9})/.test(text);
-  const hasEmail = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
-  const hasAccusation = /\b(chor|fraud|thief|stole|poisoned|abused|corrupt)\b/i.test(text);
-
-  const privacy_flags: SafetyAnalyzerOutput["privacy_flags"] = [];
-  const risk_flags: SafetyAnalyzerOutput["risk_flags"] = [];
-  const masked_entities: SafetyAnalyzerOutput["masked_entities"] = [];
-
-  if (hasPhone) {
-    privacy_flags.push("phone_number");
-    masked_entities.push({
-      type: "phone_number",
-      original_text: "[detected phone number]",
-      replacement: "[phone removed]",
-      confidence: 0.9
-    });
-  }
-
-  if (hasEmail) {
-    privacy_flags.push("email_address");
-    masked_entities.push({
-      type: "email",
-      original_text: "[detected email]",
-      replacement: "[email removed]",
-      confidence: 0.95
-    });
-  }
-
-  if (hasAccusation) {
-    risk_flags.push("direct_accusation_identifiable_person");
-    risk_flags.push("defamation_risk");
-    risk_flags.push("public_shaming_risk");
-  }
-
-  const hasSensitive = privacy_flags.length > 0;
-  const hasIdentifiableAccusation = hasAccusation;
 
   return {
     detected_language: /[\u0900-\u097F]/.test(text)
@@ -46,18 +16,43 @@ export async function safetyAnalyze(text: string): Promise<SafetyAnalyzerOutput>
       : /[A-Za-z]/.test(text)
         ? "en"
         : "unknown",
-    privacy_flags,
-    risk_flags,
-    masked_entities,
-    accusation_target_type: hasIdentifiableAccusation ? "unknown" : "none",
-    contains_identifiable_accusation: hasIdentifiableAccusation,
-    contains_sensitive_personal_data: hasSensitive,
-    recommended_visibility_ceiling: hasIdentifiableAccusation || hasSensitive
-      ? "held_for_review"
-      : "public",
-    safety_confidence: 0.72,
-    reasoning_summary: hasIdentifiableAccusation || hasSensitive
-      ? "Potential privacy or accusation risk detected."
-      : "No major privacy or accusation risk detected."
+    privacy_flags: hasPhone ? ["phone_number"] : [],
+    risk_flags: [],
+    masked_entities: hasPhone
+      ? [
+          {
+            type: "phone_number",
+            original_text: "[detected phone number]",
+            replacement: "[phone removed]",
+            confidence: 0.8
+          }
+        ]
+      : [],
+    accusation_target_type: "none",
+    contains_identifiable_accusation: false,
+    contains_sensitive_personal_data: hasPhone,
+    recommended_visibility_ceiling: hasPhone ? "held_for_review" : "public",
+    safety_confidence: 0.45,
+    reasoning_summary: hasPhone
+      ? "Fallback detected possible phone number."
+      : "Fallback detected no major safety issue."
   };
+}
+
+export async function safetyAnalyze(text: string): Promise<SafetyAnalyzerOutput> {
+  try {
+    const client = getOpenAIClient();
+
+    const response = await client.responses.create({
+      model: config.openaiModel,
+      input: buildSafetyPrompt(text)
+    });
+
+    const raw = response.output_text;
+    const parsed = JSON.parse(raw);
+    return SafetyAnalyzerOutputSchema.parse(parsed);
+  } catch (error) {
+    console.error("safetyAnalyze fallback:", error);
+    return fallbackSafety(text);
+  }
 }
